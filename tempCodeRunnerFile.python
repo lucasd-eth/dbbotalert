@@ -1,0 +1,132 @@
+from supabase import create_client
+import os
+import time
+from dotenv import load_dotenv
+
+# Tải biến môi trường từ file .env
+load_dotenv()
+
+# Lấy URL và API Key từ biến môi trường
+url = os.getenv("url")
+key = os.getenv("key")
+
+def connect_to_supabase(SUPABASE_URL: str, SUPABASE_KEY: str):
+    """
+    Kết nối với Supabase.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise ValueError("Supabase URL hoặc API key không được cung cấp.")
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def retry_request(func, max_retries=10, delay=5):
+    """Thử lại yêu cầu nếu gặp lỗi"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"Lỗi: {e}. Đang thử lại trong {delay} giây...")
+                time.sleep(delay)
+            else:
+                print(f"Lỗi nghiêm trọng: {e}. Không thể thử lại.")
+                raise
+
+def is_valid_ids(ids):
+    return len(ids) <= 100  # Giới hạn số lượng ID tối đa
+
+def clear_table_with_pagination(supabase, table_name: str, batch_size=500, delay=1):
+    """Hàm xóa bảng với phân trang"""
+    try:
+        offset = 0
+        while True:
+            # Lấy một phần nhỏ dữ liệu mỗi lần
+            response = supabase.table(table_name).select("id").range(offset, offset + batch_size - 1).execute()
+            if not response.data:
+                print(f"Đã xóa hết dữ liệu trong bảng '{table_name}'.")
+                break
+
+            ids = [record["id"] for record in response.data]
+
+            if not is_valid_ids(ids):
+                print("Danh sách ID quá lớn, không thể xử lý.")
+                break
+
+            # Xóa các bản ghi đã lấy được
+            delete_response = supabase.table(table_name).delete().in_("id", ids).execute()
+
+            if delete_response.data:
+                print(f"Đã xóa {len(ids)} bản ghi.")
+            else:
+                print(f"Không thể xóa bản ghi nào.")
+
+            # Tăng offset để lấy phần tiếp theo
+            offset += batch_size
+
+            # Thêm thời gian chờ giữa các yêu cầu
+            time.sleep(delay)
+
+    except Exception as e:
+        print(f"Error in clear_table_with_pagination: {e}")
+
+
+def clear_table_with_retry(supabase, table_name: str, batch_size=100, delay=5, max_retries=3):
+    """Hàm xóa bảng với phân trang và thử lại nếu có lỗi"""
+    retry_request(lambda: clear_table_with_pagination(supabase, table_name, batch_size, delay), max_retries)
+
+def clear_table(supabase, table_name: str):
+    """
+    Xóa toàn bộ dữ liệu từ bảng với UUID hợp lệ.
+    """
+    try:
+        # Lấy danh sách tất cả UUID
+        response = supabase.table(table_name).select("id").execute()
+        ids = [record["id"] for record in response.data]
+
+        if not ids:
+            print(f"Bảng '{table_name}' đã rỗng, không có bản ghi nào để xóa.")
+            return
+
+        # Xóa từng bản ghi theo UUID
+        for record_id in ids:
+            delete_response = supabase.table(table_name).delete().eq("id", record_id).execute()
+
+            # Kiểm tra phản hồi sau khi xóa từng bản ghi
+            if delete_response.data:
+                print(f"Đã xóa bản ghi với UUID: {record_id}")
+            else:
+                print(f"Không thể xóa bản ghi với UUID: {record_id}")
+
+        print(f"Đã xóa toàn bộ {len(ids)} bản ghi từ bảng '{table_name}'.")
+    except Exception as e:
+        print(f"Error in clear_table_with_uuids: {e}")
+
+
+def check_uuids(supabase, table_name: str):
+    try:
+        # Lấy dữ liệu từ bảng
+        response = supabase.table(table_name).select("id").execute()
+        for record in response.data:
+            print(record["id"])
+    except Exception as e:
+        print(f"Error in check_uuids: {e}")
+
+
+def main():
+    """
+    Hàm chính để kết nối với Supabase và xóa dữ liệu.
+    """
+    try:
+        supabase = connect_to_supabase(url, key)
+        print("Kết nối Supabase thành công!")
+        
+        # Tên bảng cần xóa
+        table_name = "potential_wallets"
+
+        # Xóa dữ liệu
+        clear_table_with_retry(supabase, "potential_wallets")
+        # check_uuids(supabase, table_name)
+    except Exception as e:
+        print(f"Lỗi: {e}")
+
+if __name__ == "__main__":
+    main()
